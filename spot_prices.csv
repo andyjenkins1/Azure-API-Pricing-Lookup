@@ -1,0 +1,15 @@
+Friendly Name,armSkuName,Currency,Spot Unit Price,PayGo Unit Price,Unit of Measure,Region,Meter Name,Product Name
+NC16asT4 v3,Standard_NC16as_T4_v3,USD,0.658729,1.276,1 Hour,swedencentral,NC16asT4 v3 Spot,Virtual Machines NCasT4 v3 Series Windows
+NC16asT4 v3,Standard_NC16as_T4_v3,USD,0.417762,1.276,1 Hour,swedencentral,NC16asT4 v3 Spot,Virtual Machines NCasT4 v3 Series
+D96ads v5,Standard_D96ads_v5,USD,0.975744,5.28,1 Hour,swedencentral,D96ads v5 Spot,Virtual Machines Dadsv5 Series
+D96ads v5,Standard_D96ads_v5,USD,1.791821,5.28,1 Hour,swedencentral,D96ads v5 Spot,Virtual Machines Dadsv5 Series Windows
+NV36ads A10 v5,Standard_NV36ads_A10_v5,USD,1.083521,4.16,1 Hour,swedencentral,NV36ads A10 v5 Spot,Virtual Machines NVadsA10v5 Series Windows
+NV36ads A10 v5,Standard_NV36ads_A10_v5,USD,0.775008,4.16,1 Hour,swedencentral,NV36ads A10 v5 Spot,Virtual Machines NVadsA10v5 Series
+D32ads v5,Standard_D32ads_v5,USD,0.325248,1.76,1 Hour,swedencentral,D32ads v5 Spot,Virtual Machines Dadsv5 Series
+D32ads v5,Standard_D32ads_v5,USD,0.597274,1.76,1 Hour,swedencentral,D32ads v5 Spot,Virtual Machines Dadsv5 Series Windows
+NC24ads_A100_v4,Standard_NC24ads_A100_v4,USD,1.840715,4.775,1 Hour,swedencentral,NC24ads_A100_v4 Spot,NCads A100 v4 Series Windows
+NC24ads_A100_v4,Standard_NC24ads_A100_v4,USD,1.495052,4.775,1 Hour,swedencentral,NC24ads_A100_v4 Spot,NCads A100 v4 Series Linux
+NC64asT4 v3,Standard_NC64as_T4_v3,USD,1.507022,4.603,1 Hour,swedencentral,NC64asT4 v3 Spot,Virtual Machines NCasT4 v3 Series
+NC64asT4 v3,Standard_NC64as_T4_v3,USD,2.470888,4.603,1 Hour,swedencentral,NC64asT4 v3 Spot,Virtual Machines NCasT4 v3 Series Windows
+E32ads v5,Standard_E32ads_v5,USD,0.683021,2.224,1 Hour,swedencentral,E32ads v5 Spot,Virtual Machines Eadsv5 Series Windows
+E32ads v5,Standard_E32ads_v5,USD,0.410995,2.224,1 Hour,swedencentral,E32ads v5 Spot,Virtual Machines Eadsv5 Series
