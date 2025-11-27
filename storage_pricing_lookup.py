@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 import csv
-import math
-import re
 from datetime import datetime
 from pathlib import Path
 
@@ -13,8 +11,8 @@ CURRENCY = "USD"
 RI_TERMS = ("1 Year", "3 Years")
 REQUEST_TIMEOUT = 15  # seconds
 DEFAULT_REGION = "swedencentral"  # Fallback region if SKU entry omits one
-DEFAULT_CAPACITY_TB = 1_000  # Default storage amount for cost estimates (1 PB)
-STORAGE_TYPES = ("LRS", "ZRS", "GRS")  # Storage redundancy options to include
+DEFAULT_CAPACITY_GB = 1000  # Default storage amount for cost estimates
+STORAGE_TYPES = ("LRS")  # Storage redundancy options to include
 
 # Define the SKUs you want to query. Add more entries by providing product/meter filters.
 STORAGE_SKUS = [
@@ -112,46 +110,6 @@ def fmt_price(val):
     return f"{val:.6f}" if val is not None else "n/a"
 
 
-def parse_meter_capacity_tb(meter_name):
-    """Parse a reserved capacity meter name to extract the pack size in TB."""
-    if not meter_name:
-        return None
-    match = re.search(r"(\d+(?:\.\d+)?)\s*(TB|PB)", meter_name, re.IGNORECASE)
-    if not match:
-        return None
-    qty = float(match.group(1))
-    unit = match.group(2).upper()
-    if unit == "PB":
-        return qty * 1_000  # Convert PB to TB (decimal)
-    if unit == "TB":
-        return qty
-    return None  # Unhandled unit
-
-
-def pick_best_reserved_option(items, capacity_tb, months_in_term):
-    """Pick the reserved SKU combination with the lowest amortized monthly total."""
-    best = None
-    for item in items:
-        price = item.get("unitPrice")
-        if price is None:
-            continue
-        pack_tb = parse_meter_capacity_tb(item.get("meterName"))
-        if not pack_tb:
-            continue
-        packs_needed = math.ceil(capacity_tb / pack_tb)
-        total_term_cost = price * packs_needed  # Azure publishes term totals
-        monthly_equiv = total_term_cost / months_in_term
-        if not best or monthly_equiv < best["monthly_equiv"]:
-            best = {
-                "monthly_equiv": monthly_equiv,
-                "total_term_cost": total_term_cost,
-                "packs_needed": packs_needed,
-                "pack_tb": pack_tb,
-                "item": item,
-            }
-    return best
-
-
 def probe_available_skus(region, service_family, hint=None, max_results=5):
     """Return a small sample of SKU/meter names for quick validation.
 
@@ -204,19 +162,24 @@ def main():
                 "Friendly Name",
                 "Storage Type",
                 "Product Name",
-                "Capacity (TB)",
+                "Capacity (GB)",
                 "Currency",
-                "PayGo Total (/mo)",
-                "RI 1Yr Total (/mo)",
-                "RI 3Yr Total (/mo)",
+                "PayGo Unit Price",
+                "PayGo Est @Capacity",
+                "RI 1Yr Unit Price",
+                "RI 1Yr Est @Capacity",
+                "RI 3Yr Unit Price",
+                "RI 3Yr Est @Capacity",
+                "Unit of Measure",
                 "Meter Name",
                 "Sku Name",
             ]
         )
 
         header = (
-            f"{'Friendly Name':24} {'Type':6} {'Product Name':36} {'Cap(TB)':8} {'Currency':8} "
-            f"{'PayGo/mo':14} {'RI-1Y/mo':14} {'RI-3Y/mo':14} {'Meter Name':35} {'Sku Name'}"
+            f"{'Friendly Name':24} {'Type':6} {'Product Name':36} {'Cap(GB)':8} {'Currency':8} "
+            f"{'PayGo':12} {'PayGo Est':12} {'RI-1Y':12} {'RI-1Y Est':12} {'RI-3Y':12} {'RI-3Y Est':12} "
+            f"{'Unit':12} {'Meter Name':35} {'Sku Name'}"
         )
         print(header)
         print("-" * len(header))
@@ -224,8 +187,7 @@ def main():
         for sku_conf in STORAGE_SKUS:
             storage_types = sku_conf.get("storage_types", STORAGE_TYPES)
             region = sku_conf.get("region", DEFAULT_REGION)
-            capacity_tb = sku_conf.get("capacity_tb", DEFAULT_CAPACITY_TB)
-            capacity_gb_equiv = capacity_tb * 1_000  # Azure pricing is per GB-month
+            capacity_gb = sku_conf.get("capacity_gb", DEFAULT_CAPACITY_GB)
 
             paygo_conf = sku_conf["paygo"]
             ri_conf = sku_conf["ri"]
@@ -239,9 +201,6 @@ def main():
                         token.format(redundancy=redundancy) for token in paygo_conf["meter_contains_all"]
                     ]
 
-                paygo_total = None
-                paygo_unit = None
-                paygo_pick = None
                 try:
                     paygo_filters = build_filters(
                         region,
@@ -266,7 +225,7 @@ def main():
                                 "    product={productName}, sku={skuName}, meter={meterName}, priceType={priceType}".format(
                                     **{k: (v or '') for k, v in sample.items()}
                                 )
-                    )
+                            )
                 except requests.HTTPError as e:
                     print(f"[ERROR] {friendly}: PAYG lookup failed ({e})")
                     paygo_items = []
@@ -277,7 +236,7 @@ def main():
                 paygo_pick = pick_cheapest(paygo_items)
                 paygo_price = paygo_pick.get("unitPrice") if paygo_pick else None
                 paygo_unit = paygo_pick.get("unitOfMeasure") if paygo_pick else None
-                paygo_total = paygo_price * capacity_gb_equiv if paygo_price is not None else None
+                paygo_est = paygo_price * capacity_gb if paygo_price is not None else None
 
                 formatted_ri_contains = None
                 if ri_conf.get("meter_contains_all"):
@@ -287,7 +246,6 @@ def main():
 
                 ri_prices = {}
                 for term in ri_conf.get("reservation_terms", RI_TERMS):
-                    months_in_term = 36 if term == "3 Years" else 12
                     try:
                         ri_filters = build_filters(
                             region,
@@ -315,30 +273,26 @@ def main():
                                     )
                                 )
                         ri_pick = pick_cheapest(ri_items)
-                        ri_best = pick_best_reserved_option(ri_items, capacity_tb, months_in_term)
-                        if not ri_best:
-                            ri_best = {
-                                "monthly_equiv": None,
-                                "total_term_cost": None,
-                                "packs_needed": None,
-                                "pack_tb": None,
-                                "item": ri_pick or {},
-                            }
-                        ri_prices[term] = ri_best
+                        ri_prices[term] = (
+                            ri_pick.get("unitPrice") if ri_pick else None,
+                            ri_pick.get("unitOfMeasure") if ri_pick else None,
+                        )
                     except requests.HTTPError as e:
                         print(f"[WARN] {friendly}: RI {term} lookup failed ({e}); column will show n/a.")
-                        ri_prices[term] = None
+                        ri_prices[term] = (None, None)
                     except requests.RequestException as e:
                         print(f"[WARN] {friendly}: RI {term} lookup failed (network/timeout: {e}); column will show n/a.")
-                        ri_prices[term] = None
+                        ri_prices[term] = (None, None)
 
-                ri_1y = ri_prices.get("1 Year") or {}
-                ri_3y = ri_prices.get("3 Years") or {}
-                ri_1y_est = ri_1y.get("monthly_equiv")
-                ri_3y_est = ri_3y.get("monthly_equiv")
+                ri_1y_price, ri_1y_unit = ri_prices.get("1 Year", (None, None))
+                ri_3y_price, ri_3y_unit = ri_prices.get("3 Years", (None, None))
+                ri_1y_est = ri_1y_price * capacity_gb if ri_1y_price is not None else None
+                ri_3y_est = ri_3y_price * capacity_gb if ri_3y_price is not None else None
+
+                unit = paygo_unit or ri_1y_unit or ri_3y_unit or ""
 
                 # Use the first available meterName/skuName for display
-                sample_item = paygo_pick or (ri_1y.get("item") if ri_1y else None) or (ri_3y.get("item") if ri_3y else None) or {}
+                sample_item = paygo_pick or {}
                 meter_name = sample_item.get("meterName", "")
                 sku_name = sample_item.get("skuName", "")
 
@@ -349,20 +303,26 @@ def main():
                         friendly,
                         redundancy,
                         product_name_display,
-                        capacity_tb,
+                        capacity_gb,
                         CURRENCY,
-                        fmt_price(paygo_total),
+                        fmt_price(paygo_price),
+                        fmt_price(paygo_est),
+                        fmt_price(ri_1y_price),
                         fmt_price(ri_1y_est),
+                        fmt_price(ri_3y_price),
                         fmt_price(ri_3y_est),
+                        unit,
                         meter_name or "",
                         sku_name or "",
                     ]
                 )
 
                 print(
-                    f"{friendly:24} {redundancy:6} {product_name_display:36} {capacity_tb:8} {CURRENCY:8} "
-                    f"{fmt_price(paygo_total):14} {fmt_price(ri_1y_est):14} {fmt_price(ri_3y_est):14} "
-                    f"{meter_name or '':35} {sku_name or ''}"
+                    f"{friendly:24} {redundancy:6} {product_name_display:36} {capacity_gb:8} {CURRENCY:8} "
+                    f"{fmt_price(paygo_price):12} {fmt_price(paygo_est):12} "
+                    f"{fmt_price(ri_1y_price):12} {fmt_price(ri_1y_est):12} "
+                    f"{fmt_price(ri_3y_price):12} {fmt_price(ri_3y_est):12} "
+                    f"{unit:12} {meter_name or '':35} {sku_name or ''}"
                 )
 
 
