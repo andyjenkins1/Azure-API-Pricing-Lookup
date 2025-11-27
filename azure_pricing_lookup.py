@@ -21,6 +21,7 @@ VM_SKUS = {
 
 BASE_URL = "https://prices.azure.com/api/retail/prices"
 API_VERSION = "2023-01-01-preview"  # per MS docs
+RI_TERMS = ("1 Year", "3 Years")
 
 def fetch_spot_prices_for_sku(arm_sku_name: str):
     """Call Azure Retail Prices API for a single armSkuName in Sweden Central, returning all Spot VM prices."""
@@ -113,6 +114,43 @@ def fetch_paygo_prices_for_sku(arm_sku_name: str):
     return filtered
 
 
+def fetch_ri_prices_for_sku(arm_sku_name: str, reservation_term: str):
+    """
+    Fetch Reserved Instance prices for a given armSkuName and term (e.g., '1 Year', '3 Years').
+    Returns the raw Items array from the retail prices API.
+    """
+    query = (
+        f"serviceName eq 'Virtual Machines' and "
+        f"armRegionName eq '{REGION}' and "
+        f"armSkuName eq '{arm_sku_name}' and "
+        f"priceType eq 'Reservation' and "
+        f"reservationTerm eq '{reservation_term}'"
+    )
+
+    params = {
+        "api-version": API_VERSION,
+        "currencyCode": CURRENCY,
+        "$filter": query,
+    }
+
+    items = []
+
+    resp = requests.get(BASE_URL, params=params)
+    resp.raise_for_status()
+    data = resp.json()
+    items.extend(data.get("Items", []))
+
+    next_link = data.get("NextPageLink")
+    while next_link:
+        resp = requests.get(next_link)
+        resp.raise_for_status()
+        data = resp.json()
+        items.extend(data.get("Items", []))
+        next_link = data.get("NextPageLink")
+
+    return items
+
+
 def main():
     timestamp = datetime.now().strftime("%d%m%y_%H%M")
     output_csv = Path(__file__).with_name(f"spot_prices_{timestamp}.csv")
@@ -121,15 +159,19 @@ def main():
     def fmt_price(val):
         return f"{val:.6f}" if val is not None else "n/a"
 
+    def pick_cheapest(items):
+        """Pick the cheapest non-null unitPrice from a list of retail API items."""
+        return min(
+            (i for i in items if i.get("unitPrice") is not None),
+            key=lambda i: i["unitPrice"],
+            default=None,
+        )
+
     def pick_cheapest_paygo(paygo_items):
         """Prefer 1 Hour meters; otherwise pick any cheapest non-null price."""
         one_hour = [i for i in paygo_items if (i.get("unitOfMeasure") or "").lower() == "1 hour"]
         pool = one_hour if one_hour else paygo_items
-        cheapest = min(
-            (i for i in pool if i.get("unitPrice") is not None),
-            key=lambda i: i["unitPrice"],
-            default=None,
-        )
+        cheapest = pick_cheapest(pool)
         if cheapest:
             return cheapest.get("unitPrice"), cheapest.get("unitOfMeasure")
         return None, None
@@ -144,6 +186,8 @@ def main():
                 "Currency",
                 "Spot Unit Price",
                 "PayGo Unit Price",
+                "RI 1Yr Unit Price",
+                "RI 3Yr Unit Price",
                 "Unit of Measure",
                 "Region",
                 "Meter Name",
@@ -154,7 +198,8 @@ def main():
         # Print table header to console
         header = (
             f"{'Friendly Name':25} {'armSkuName':30} "
-            f"{'Currency':8} {'Spot':12} {'PayGo':12} {'Unit':6} {'Region':15} {'Meter Name':30} {'Product Name'}"
+            f"{'Currency':8} {'Spot':12} {'PayGo':12} {'RI-1Y':12} {'RI-3Y':12} "
+            f"{'Unit':8} {'Region':15} {'Meter Name':30} {'Product Name'}"
         )
         print(header)
         print("-" * len(header))
@@ -176,6 +221,19 @@ def main():
 
             paygo_price, paygo_unit = pick_cheapest_paygo(paygo_items)
 
+            ri_results = {term: (None, None) for term in RI_TERMS}
+            for term in RI_TERMS:
+                try:
+                    ri_items = fetch_ri_prices_for_sku(arm_sku, term)
+                    cheapest = pick_cheapest(ri_items)
+                    if cheapest:
+                        ri_results[term] = (cheapest.get("unitPrice"), cheapest.get("unitOfMeasure"))
+                except requests.HTTPError as e:
+                    print(f"[WARN] {friendly_name} ({arm_sku}): RI {term} lookup failed ({e}); RI column will show n/a.")
+
+            ri_1y_price, ri_1y_unit = ri_results.get("1 Year", (None, None))
+            ri_3y_price, ri_3y_unit = ri_results.get("3 Years", (None, None))
+
             if not spot_items:
                 print(f"[NO DATA] {friendly_name} ({arm_sku}) – no Spot prices found in {REGION}")
                 continue
@@ -189,7 +247,8 @@ def main():
                 meter = item.get("meterName")
                 product_name = item.get("productName")
 
-                units_seen.update(filter(None, [unit, paygo_unit]))
+                combined_unit = unit or paygo_unit or ri_1y_unit or ri_3y_unit or ""
+                units_seen.update(filter(None, [combined_unit]))
 
                 if paygo_price is not None and price is not None and paygo_price < price:
                     print(f"[WARN] {friendly_name}: PAYG ({paygo_price}) is below Spot ({price}); verify filtering.")
@@ -202,7 +261,9 @@ def main():
                         currency,
                         fmt_price(price),
                         fmt_price(paygo_price),
-                        unit or paygo_unit,
+                        fmt_price(ri_1y_price),
+                        fmt_price(ri_3y_price),
+                        combined_unit,
                         region,
                         meter,
                         product_name,
@@ -212,7 +273,8 @@ def main():
                 # Also print to console
                 print(
                     f"{friendly_name:25} {arm_sku:30} "
-                    f"{currency:8} {fmt_price(price):12} {fmt_price(paygo_price):12} {unit or paygo_unit:6} {region:15} "
+                    f"{currency:8} {fmt_price(price):12} {fmt_price(paygo_price):12} {fmt_price(ri_1y_price):12} {fmt_price(ri_3y_price):12} "
+                    f"{combined_unit:8} {region:15} "
                     f"{meter:30} {product_name}"
                 )
 
